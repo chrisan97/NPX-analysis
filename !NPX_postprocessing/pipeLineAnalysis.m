@@ -40,6 +40,7 @@ isiV = sqKilosort.isiViolations(myKsDir);
 cwavesPath = [cd '\C_waves\'];
 c_wf = readNPY([cwavesPath 'mean_waveforms.npy']); % read in the mean waveforms from Cwaves
 %snr = readNPY([cwavesPath 'cluster_snr.npy']);
+qMetric_vals = [];
 
 for i = 1:length(goodClusters)
     % Load in relevant spike sort quality from isiV
@@ -71,19 +72,20 @@ for i = 1:length(goodClusters)
     
     % Find the channel for the current unit
     totalWaveform = [];
+    zerod_squeezedWf = squeezedWf - squeezedWf(:,1);
     for j = 1:length(sp.xcoords)
         % Iterate through the channels and then find min peak and maximum
         % peak for all of them. Where the maximum peak comes after the
         % minimum
-        [minVal minCol] = min(squeezedWf(j,1:end)); 
-        [maxVal maxCol] = max(squeezedWf(j,minCol:end));
-        totalWaveform(j,1) = maxVal - minVal;       % Find amplitude of the spike
+        [minVal minCol] = min(zerod_squeezedWf(j,1:end)); 
+        [maxVal maxCol] = max(zerod_squeezedWf(j,minCol:end));
+        totalWaveform(j,1) = abs(minVal);       % Find amplitude of the spike
         totalWaveform(j,2) = (maxCol - 1) * 1/30000 * 1000;      % Because maxCol index starts from the index of minCol (this is waveform width)
         % This line is supposed to be (maxCol + minCol) - minCol - 1
         
-        peakOfFirst = squeezedWf(j,1);      % Take the first value of the trace, this should be an okay approx for baseline   
-        [firstPeakVal firstPeakCol] = max(squeezedWf(j,1:minCol));      % Calculate the value of first peak (a)
-        [secondPeakVal secondPeakCol] = max(squeezedWf(j,minCol:end));  % Calculate the value of second peak (b)
+        peakOfFirst = zerod_squeezedWf(j,1);      % Take the first value of the trace, this should be an okay approx for baseline   
+        [firstPeakVal firstPeakCol] = max(zerod_squeezedWf(j,1:minCol));      % Calculate the value of first peak (a)
+        [secondPeakVal secondPeakCol] = max(zerod_squeezedWf(j,minCol:end));  % Calculate the value of second peak (b)
         
         a = firstPeakVal - peakOfFirst;     
         b = secondPeakVal - peakOfFirst;           
@@ -92,7 +94,7 @@ for i = 1:length(goodClusters)
     [maxAmplitudeWaveform maxChannel] = max(totalWaveform);     % Take the waveform with maximum amplitude and grab the maximum channel 
     spikeWidthTime = totalWaveform(maxChannel(1),2);            % Grab the width of the spike and the ratio from the max channel 
     spikePeakRatio = totalWaveform(maxChannel(1),3);
-    rawWf = squeeze(wf.waveForms);
+    rawWf = (squeeze(wf.waveForms) * 0.5 / 8192) / 80 * 1000000;
     rawWf = squeeze(rawWf(:,maxChannel(1),:));
 
     % Load in relevant C_waves waveforms 
@@ -136,8 +138,11 @@ for i = 1:length(goodClusters)
 
     % Plot the waveform at the max amplitude channel
     subplot(2,4,1)
-    plot(squeezedWf(maxChannel(1),:)-squeezedWf(maxChannel(1),1),'k','LineWidth',2.0) % at peak channel
-    hold on;
+    for p = 1:1000
+        plot(rawWf(p,:)-rawWf(p,1),'Color',[0 0 0 0.08],'LineWidth',0.5)
+        hold on;
+    end
+    plot(squeezedWf(maxChannel(1),:)-squeezedWf(maxChannel(1),1),'r','LineWidth',2.0) % at peak channel
     set(gca,'box','off')
     set(gca,'FontSize',14)
     xticks([0 15 30 45 60 75 90])         % Points are still in samples
@@ -149,7 +154,6 @@ for i = 1:length(goodClusters)
     minYlim = min(squeezedWf(maxChannel(1),:)-squeezedWf(maxChannel(1),1));
     maxYlim = max(squeezedWf(maxChannel(1),:)-squeezedWf(maxChannel(1),1));
     ylim([minYlim + minYlim/2 maxYlim + 2*maxYlim])
-
 
     % Plot waveform across multiple channels
     subplot(2,4,2)
@@ -251,14 +255,16 @@ for i = 1:length(goodClusters)
     checkWaveformCrossCoef = diag(waveformCrossCoef,-1);
     
     subplot(4,6,17)
+    corrcoefBool = 0;
     h = heatmap(waveformCrossCoef,'MissingDataColor','w','ColorLimits',[0 1],'Colormap',parula);
     if isempty(find(checkWaveformCrossCoef <= 0.9)) & isempty(find(waveformCrossCoef <= 0.7))
         title('Good corrcoef')
+        corrcoefBool = 1;
     else
         title('Bad corrcoef')
+        corrcoefBool = 0;
     end
     
-
     subplot(2,6,12)
     histogram(diff(spikeTimes)*1000,0:1:100,'FaceColor','black','Edgecolor','none',...
         'Normalization','probability')
@@ -281,7 +287,7 @@ for i = 1:length(goodClusters)
     sgtitle(['Cluster ',num2str(goodClusters(i)+1),'; NumOfSpikes= ',num2str(lenOfSpikeTrain),...
         '; % ISI violations= ',num2str(percISIViolations),'% ; L-Ratio= ',num2str(LRatioUnit)])
 
-
+    % Save the figures
     fPath = fullfile(myKsDir,'waveforms');
     try
         saveFigurePdf(waveFormFigure, fullfile(fPath, append('Cluster_',num2str(goodClusters(i)+1))))
@@ -289,15 +295,27 @@ for i = 1:length(goodClusters)
         disp(['failed to save figure'])
     end
     close(waveFormFigure);
+
+    % Save the variables
+    qMetric_vals.(sprintf('Unit%d',goodClusters(i)+1)).amplitude = totalWaveform(maxChannel(1),1); 
+    qMetric_vals.(sprintf('Unit%d',goodClusters(i)+1)).maxChannel = maxChannel(1);
+    qMetric_vals.(sprintf('Unit%d',goodClusters(i)+1)).spikeWidth = spikeWidthTime;
+    qMetric_vals.(sprintf('Unit%d',goodClusters(i)+1)).numOfSpikes = lenOfSpikeTrain;
+    qMetric_vals.(sprintf('Unit%d',goodClusters(i)+1)).ISIv = percISIViolations;
+    qMetric_vals.(sprintf('Unit%d',goodClusters(i)+1)).LRatio = LRatioUnit;
+    qMetric_vals.(sprintf('Unit%d',goodClusters(i)+1)).waveformCorrelation = corrcoefBool;
+    qMetric_vals.(sprintf('Unit%d',goodClusters(i)+1)).cluster = goodClusters(i)+1;
+
 end
 close all
 
+% Save qMetric_vals structure
+fPath = fullfile(myKsDir,'qMetrics');
 
+% Ensure the directory exists (optional)
+if ~isfolder(fPath)
+    mkdir(fPath); % Create the directory if it doesn't exist
+end
 
+save(fullfile(fPath,'qMetric_vals.mat'),'qMetric_vals')
 
-
-%% Other sorting metrics
-% TO DO:
-% 1. L-Ratio calculation (how well is the cluster isolated?)
-% 2. Amplitude across time
-% 3. Spike rate across time
